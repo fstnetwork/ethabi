@@ -23,6 +23,7 @@ pub trait Tokenizer {
 			ParamType::Int(_) => Self::tokenize_int(value).map(Into::into).map(Token::Int),
 			ParamType::Array(ref p) => Self::tokenize_array(value, p).map(Token::Array),
 			ParamType::FixedArray(ref p, len) => Self::tokenize_fixed_array(value, p, len).map(Token::FixedArray),
+			ParamType::Tuple(ref params) => Self::tokenize_tuple(value, params).map(Token::Tuple),
 		}.chain_err(|| format!("Cannot parse {}", param))
 	}
 
@@ -83,6 +84,55 @@ pub trait Tokenizer {
 		}
 
 		Ok(result)
+	}
+
+	/// Tries to parse a value as a vector of tokens.
+	fn tokenize_tuple(value: &str, params: &Vec<ParamType>) -> Result<Vec<Token>, Error> {
+		if !value.starts_with('(') || !value.ends_with(')') {
+			return Err(ErrorKind::InvalidData.into());
+		}
+
+		if value.len() == 2 {
+			return Ok(vec![]);
+		}
+
+		let mut tokens = Vec::with_capacity(params.len());
+		let mut nested = 0usize;
+		let mut ignore = false;
+		let mut last_token_pos= 1usize;
+		let mut params = params.iter();
+
+		for (pos, ch) in value.char_indices().skip(1) {
+			match ch {
+				'(' if !ignore => nested += 1,
+				')' if !ignore => {
+					if nested == 0 {
+						match params.next() {
+							Some(param) if pos + 1 == value.len() => {
+								let token = Self::tokenize(param, &value[last_token_pos..pos])?;
+								tokens.push(token);
+								return Ok(tokens);
+							},
+							_ => return Err(ErrorKind::InvalidData.into())
+						}
+					}
+					nested -= 1;
+				},
+				',' if !ignore && nested == 0 => {
+					match params.next() {
+						Some(param) => {
+							let token = Self::tokenize(param, &value[last_token_pos..pos])?;
+							tokens.push(token);
+							last_token_pos = pos + 1;
+						},
+						None => return Err(ErrorKind::InvalidData.into())
+					}
+				},
+				'"' => ignore = !ignore,
+				_ => ()
+			}
+		}
+		Err(ErrorKind::InvalidData.into())
 	}
 
 	/// Tries to parse a value as an address.

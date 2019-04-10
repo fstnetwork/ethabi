@@ -4,25 +4,10 @@ use hex::ToHex;
 use {ParamType, Address, FixedBytes, Bytes, Uint};
 
 /// Ethereum ABI params.
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-	/// Address.
-	///
-	/// solidity name: address
-	/// Encoded to left padded [0u8; 32].
-	Address(Address),
-	/// Vector of bytes with known size.
-	///
-	/// solidity name eg.: bytes8, bytes32, bytes64, bytes1024
-	/// Encoded to right padded [0u8; ((N + 31) / 32) * 32].
-	FixedBytes(FixedBytes),
-	/// Vector of bytes of unknown size.
-	///
-	/// solidity name: bytes
-	/// Encoded in two parts.
-	/// Init part: offset of 'closing part`.
-	/// Closing part: encoded length followed by encoded right padded bytes.
-	Bytes(Bytes),
+	// elementary types:
+
 	/// Signed integer.
 	///
 	/// solidity name: int
@@ -31,43 +16,71 @@ pub enum Token {
 	///
 	/// solidity name: uint
 	Uint(Uint),
+	/// Address.
+	///
+	/// solidity name: address
+	/// Encoded to left padded [0u8; 32].
+	Address(Address),
 	/// Boolean value.
 	///
 	/// solidity name: bool
 	/// Encoded as left padded [0u8; 32], where last bit represents boolean value.
 	Bool(bool),
-	/// String.
+	/// Vector of bytes with known size.
 	///
-	/// solidity name: string
-	/// Encoded in the same way as bytes. Must be utf8 compliant.
-	String(String),
+	/// solidity name eg.: bytes8, bytes32
+	/// Encoded to right padded [0u8; 32].
+	FixedBytes(FixedBytes),
+
+	// fixed-size array types:
+
 	/// Array with known size.
 	///
 	/// solidity name eg.: int[3], bool[3], address[][8]
 	/// Encoding of array is equal to encoding of consecutive elements of array.
 	FixedArray(Vec<Token>),
+
+	// non-fixed-size types:
+
+	/// Vector of bytes of unknown size.
+	///
+	/// solidity name: bytes
+	/// Encoded in two parts.
+	/// Init part: offset of 'closing part`.
+	/// Closing part: encoded length followed by encoded right padded bytes.
+	Bytes(Bytes),
+	/// String.
+	///
+	/// solidity name: string
+	/// Encoded in the same way as bytes. Must be utf8 compliant.
+	String(String),
 	/// Array of params with unknown size.
 	///
 	/// solidity name eg. int[], bool[], address[5][]
 	Array(Vec<Token>),
+	/// Tuple of params.
+	///
+	/// solidity name eg. (uint256,bool)
+	Tuple(Vec<Token>),
+}
+
+fn concat_to_string(tokens: &[Token]) -> String {
+	tokens.iter()
+		.map(|ref t| t.to_string())
+		.collect::<Vec<String>>()
+		.join(",")
 }
 
 impl fmt::Display for Token {
 	fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-		match *self {
+		match self {
 			Token::Bool(b) => write!(f, "{}", b),
 			Token::String(ref s) => write!(f, "{}", s),
 			Token::Address(ref a) => write!(f, "{:x}", a),
 			Token::Bytes(ref bytes) | Token::FixedBytes(ref bytes) => write!(f, "{}", bytes.to_hex::<String>()),
 			Token::Uint(ref i) | Token::Int(ref i) => write!(f, "{:x}", i),
-			Token::Array(ref arr) | Token::FixedArray(ref arr) => {
-				let s = arr.iter()
-					.map(|ref t| format!("{}", t))
-					.collect::<Vec<String>>()
-					.join(",");
-
-				write!(f, "[{}]", s)
-			}
+			Token::Array(ref tokens) | Token::FixedArray(ref tokens) => write!(f, "[{}]", concat_to_string(tokens)),
+			Token::Tuple(ref tokens) => write!(f, "({})", concat_to_string(tokens))
 		}
 	}
 }
@@ -77,7 +90,7 @@ impl Token {
 	pub fn is_dynamic(&self) -> bool {
 		match self {
 			Token::Bytes(_) | Token::String(_) | Token::Array(_) => true,
-			Token::FixedArray(ref tokens) => tokens.iter().any(|ref token| token.is_dynamic()),
+			Token::FixedArray(ref tokens) | Token::Tuple(ref tokens) => tokens.iter().any(|ref elem| elem.is_dynamic()),
 			_ => false
 		}
 	}
@@ -119,6 +132,12 @@ impl Token {
 			Token::FixedArray(ref tokens) =>
 				if let ParamType::FixedArray(ref param_type, size) = *param_type {
 					size == tokens.len() && tokens.iter().all(|t| t.type_check(param_type))
+				} else {
+					false
+				},
+			Token::Tuple(ref tokens) =>
+				if let ParamType::Tuple(ref params) = *param_type {
+					Token::types_check(tokens, params)
 				} else {
 					false
 				},
@@ -197,6 +216,14 @@ impl Token {
 		}
 	}
 
+	/// Converts token to...
+	pub fn to_tuple(self) -> Option<Vec<Token>> {
+		match self {
+			Token::Tuple(tokens) => Some(tokens),
+			_ => None,
+		}
+	}
+
 	/// Check if all the types of the tokens match the given parameter types.
 	pub fn types_check(tokens: &[Token], param_types: &[ParamType]) -> bool {
 		param_types.len() == tokens.len() && {
@@ -241,6 +268,8 @@ mod tests {
 		assert_not_type_check(vec![Token::FixedArray(vec![Token::Bool(false), Token::Bool(true)])], vec![ParamType::FixedArray(Box::new(ParamType::Bool), 3)]);
 		assert_not_type_check(vec![Token::FixedArray(vec![Token::Bool(false), Token::Uint(0.into())])], vec![ParamType::FixedArray(Box::new(ParamType::Bool), 2)]);
 		assert_not_type_check(vec![Token::FixedArray(vec![Token::Bool(false), Token::Bool(true)])], vec![ParamType::FixedArray(Box::new(ParamType::Address), 2)]);
+		assert_type_check(vec![Token::Tuple(vec![Token::Bool(false), Token::Uint(0.into())])], vec![ParamType::Tuple(vec![ParamType::Bool, ParamType::Uint(256)])]);
+		assert_not_type_check(vec![Token::Tuple(vec![Token::Bool(false), Token::Uint(0.into())])], vec![ParamType::Tuple(vec![ParamType::Bool, ParamType::Uint(256), ParamType::Uint(256)])]);
 	}
 
 	#[test]

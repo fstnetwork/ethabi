@@ -6,24 +6,34 @@ use super::Writer;
 /// Function and event param types.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamType {
-	/// Address.
-	Address,
-	/// Bytes.
-	Bytes,
-	/// Signed integer.
-	Int(usize),
+	// elementary types:
+
 	/// Unsigned integer.
 	Uint(usize),
+	/// Two’s complement signed integer.
+	Int(usize),
+	/// Address.
+	Address,
 	/// Boolean.
 	Bool,
+	/// Vector of bytes with fixed size.
+	FixedBytes(usize),
+
+	// fixed-size array types:
+
+	/// Array with fixed size.
+	FixedArray(Box<ParamType>, usize),
+
+	// non-fixed-size types:
+
+	/// Bytes.
+	Bytes,
 	/// String.
 	String,
 	/// Array of unknown size.
 	Array(Box<ParamType>),
-	/// Vector of bytes with fixed size.
-	FixedBytes(usize),
-	/// Array with fixed size.
-	FixedArray(Box<ParamType>, usize),
+	/// Tuple.
+	Tuple(Vec<ParamType>),
 }
 
 impl fmt::Display for ParamType {
@@ -47,8 +57,9 @@ impl ParamType {
 	pub fn is_dynamic(&self) -> bool {
 		match self {
 			ParamType::Bytes | ParamType::String | ParamType::Array(_) => true,
-			ParamType::FixedArray(elem_type, _) => elem_type.is_dynamic(),
-			_ => false
+			ParamType::FixedArray(ref param, _) => param.is_dynamic(),
+			ParamType::Tuple(ref params) => params.iter().any(|ref param| param.is_dynamic()),
+			_ => false,
 		}
 	}
 }
@@ -70,6 +81,8 @@ mod tests {
 		assert_eq!(format!("{}", ParamType::FixedArray(Box::new(ParamType::Uint(256)), 2)), "uint256[2]".to_owned());
 		assert_eq!(format!("{}", ParamType::FixedArray(Box::new(ParamType::String), 2)), "string[2]".to_owned());
 		assert_eq!(format!("{}", ParamType::FixedArray(Box::new(ParamType::Array(Box::new(ParamType::Bool))), 2)), "bool[][2]".to_owned());
+		assert_eq!(format!("{}", ParamType::Tuple(vec![ParamType::Bool, ParamType::Uint(256)])), "(bool,uint256)".to_owned());
+		assert_eq!(format!("{}", ParamType::Tuple(vec![ParamType::Bool, ParamType::String])), "(bool,string)".to_owned());
 	}
 
 	#[test]
@@ -85,5 +98,7 @@ mod tests {
 		assert_eq!(ParamType::FixedArray(Box::new(ParamType::Uint(256)), 2).is_dynamic(), false);
 		assert_eq!(ParamType::FixedArray(Box::new(ParamType::String), 2).is_dynamic(), true);
 		assert_eq!(ParamType::FixedArray(Box::new(ParamType::Array(Box::new(ParamType::Bool))), 2).is_dynamic(), true);
+		assert_eq!(ParamType::Tuple(vec![ParamType::Bool, ParamType::Uint(256)]).is_dynamic(), false);
+		assert_eq!(ParamType::Tuple(vec![ParamType::Bool, ParamType::String]).is_dynamic(), true);
 	}
 }

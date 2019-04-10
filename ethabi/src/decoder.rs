@@ -219,6 +219,38 @@ fn decode_param(param: &ParamType, slices: &[Word], offset: usize) -> Result<Dec
 			};
 
 			Ok(result)
+		},
+		ParamType::Tuple(ref params) => {
+			let mut tokens = Vec::with_capacity(params.len());
+			let new_offset = if param.is_dynamic() {
+				let offset_slice = try!(peek(slices, offset));
+				let tail_offset = (try!(as_u32(offset_slice)) / 32) as usize;
+				let slices = &slices[tail_offset..];
+				let mut new_offset = 0;
+
+				for param in params.iter() {
+					let res = try!(decode_param(param, &slices, new_offset));
+					new_offset = res.new_offset;
+					tokens.push(res.token);
+				}
+				offset + 1
+			} else {
+				let mut new_offset = offset;
+
+				for param in params.iter() {
+					let res = try!(decode_param(param, &slices, new_offset));
+					new_offset = res.new_offset;
+					tokens.push(res.token);
+				}
+				new_offset
+			};
+
+			let result = DecodeResult {
+				token: Token::Tuple(tokens),
+				new_offset,
+			};
+
+			Ok(result)
 		}
 	}
 }

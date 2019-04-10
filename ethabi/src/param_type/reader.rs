@@ -6,8 +6,8 @@ pub struct Reader;
 impl Reader {
 	/// Converts string to param type.
 	pub fn read(name: &str) -> Result<ParamType, Error> {
-		// check if it is a fixed or dynamic array.
-		if let Some(']') = name.chars().last() {
+		if name.ends_with(']') {
+			// check if it is a fixed or dynamic array.
 			// take number part
 			let num: String = name.chars()
 				.rev()
@@ -21,14 +21,50 @@ impl Reader {
 			let count = name.chars().count();
 			if num.is_empty() {
 				// we already know it's a dynamic array!
-				let subtype = try!(Reader::read(&name[..count - 2]));
+				let subtype = try!(Self::read(&name[..count - 2]));
 				return Ok(ParamType::Array(Box::new(subtype)));
 			} else {
 				// it's a fixed array.
 				let len = try!(usize::from_str_radix(&num, 10));
-				let subtype = try!(Reader::read(&name[..count - num.len() - 2]));
+				let subtype = try!(Self::read(&name[..count - num.len() - 2]));
 				return Ok(ParamType::FixedArray(Box::new(subtype), len));
 			}
+		}
+
+		if name.ends_with(')') {
+			let mut chars = name.char_indices();
+			if Some('(') == chars.next().map(|(_, ch)| ch) {
+				let mut params = Vec::new();
+				let mut nested = 0usize;
+				// '('.len_utf8()
+				let mut last_param_pos = 1usize;
+
+				for (pos, ch) in chars {
+					match ch {
+						'(' => nested += 1,
+						')' => {
+							if nested == 0 {
+								// pos + ')'.len_utf8()
+								if pos + 1 == name.len() {
+									let param = Self::read(&name[last_param_pos..pos])?;
+									params.push(param);
+									return Ok(ParamType::Tuple(params));
+								} else {
+									return Err(ErrorKind::InvalidName(name.to_owned()).into());
+								}
+							}
+							nested -= 1;
+						},
+						',' if nested == 0 => {
+							let param = Self::read(&name[last_param_pos..pos])?;
+							params.push(param);
+							last_param_pos = pos + 1;
+						},
+						_ => (),
+					}
+				}
+			}
+			return Err(ErrorKind::InvalidName(name.to_owned()).into());
 		}
 
 		let result = match name {
@@ -96,5 +132,18 @@ mod tests {
 	fn test_read_mixed_arrays() {
 		assert_eq!(Reader::read("bool[][3]").unwrap(), ParamType::FixedArray(Box::new(ParamType::Array(Box::new(ParamType::Bool))), 3));
 		assert_eq!(Reader::read("bool[3][]").unwrap(), ParamType::Array(Box::new(ParamType::FixedArray(Box::new(ParamType::Bool), 3))));
+	}
+
+	#[test]
+	fn test_read_tuple_param() {
+		assert_eq!(Reader::read("(address,bool)").unwrap(), ParamType::Tuple(vec![ParamType::Address, ParamType::Bool]));
+		assert_eq!(Reader::read("(bool[3],uint256)").unwrap(), ParamType::Tuple(vec![ParamType::FixedArray(Box::new(ParamType::Bool), 3), ParamType::Uint(256)]));
+		assert_eq!(
+			Reader::read("((uint256[],bool)[3],string)").unwrap(),
+			ParamType::Tuple(vec![
+				ParamType::FixedArray(Box::new(ParamType::Tuple(vec![ParamType::Array(Box::new(ParamType::Uint(256))), ParamType::Bool])), 3),
+				ParamType::String
+			])
+		);
 	}
 }

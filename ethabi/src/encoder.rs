@@ -157,6 +157,17 @@ fn encode_token(token: &Token) -> Mediate {
 				Mediate::Raw(encode_head_tail(&mediates))
 			}
 		},
+		Token::Tuple(ref tokens) => {
+			let mediates = tokens.iter()
+				.map(encode_token)
+				.collect();
+
+			if token.is_dynamic() {
+				Mediate::PrefixedArray(mediates)
+			} else {
+				Mediate::Raw(encode_head_tail(&mediates))
+			}
+		},
 	}
 }
 
